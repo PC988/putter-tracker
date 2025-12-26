@@ -75,7 +75,7 @@
       position: absolute;
       left: 0;
       top: 0;
-      pointer-events: none; /* pointer events handled via JS with hit-testing */
+      pointer-events: auto; /* allow dragging events on overlay */
     }
 
     #controls {
@@ -305,7 +305,7 @@
       let sumXBlue = 0, sumYBlue = 0, countBlue = 0;
       let sumXRed = 0, sumYRed = 0, countRed = 0;
 
-      // Dense pixel scan for fast/clean recognition
+      // Dense pixel scan for recognition
       const step = 4 * 1;
       for (let i = 0; i < data.length; i += step) {
         const r = data[i];
@@ -320,11 +320,11 @@
           hsv.s > 0.45 &&                // fairly saturated
           hsv.v > 0.30;                  // not too dark
 
-        // RED (top) – bright, saturated sticker red
+        // RED (top) – strong red, but a bit forgiving
         const isRedBase =
-          (hsv.h < 10 || hsv.h > 350) &&  // pure red, less orange/skin
-          hsv.s > 0.65 &&                 // really saturated
-          hsv.v > 0.45;                   // fairly bright
+          (hsv.h < 20 || hsv.h > 340) && // red band, not orange
+          hsv.s > 0.5 &&                 // saturated
+          hsv.v > 0.35;                  // not super dark
 
         const pixelIndex = i / 4;
         const x = pixelIndex % w;
@@ -409,7 +409,7 @@
       }
 
       // Filter red by area (ignore tiny noise and huge blobs like feet)
-      if (countRed > 30 && countRed < 2500 && rawRedCenter) {
+      if (countRed > 10 && countRed < 10000 && rawRedCenter) {
         redCenter = { ...rawRedCenter };
       }
 
@@ -418,8 +418,8 @@
         const dx = redCenter.x - blueCenter.x;
         const dy = redCenter.y - blueCenter.y; // negative if red is above
 
-        // tweak numbers if needed:
-        if (Math.abs(dx) > 150 || dy > -10 || dy < -400) {
+        // Fairly forgiving; adjust if needed
+        if (Math.abs(dx) > 220 || dy > 80 || dy < -500) {
           redCenter = null;
         }
       }
@@ -467,9 +467,7 @@
           }
         }
       }
-
-      // If we don't see both markers, we still keep previous contactAngle,
-      // we just don't update it.
+      // If we don't see both markers, we keep previous contact angle.
     }
 
     function zeroAngle() {
