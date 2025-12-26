@@ -41,6 +41,13 @@
       border-radius: 8px;
       overflow: hidden;
       background: #111;
+      transition: transform 0.2s ease;
+      transform-origin: center center;
+    }
+
+    /* When flipped, rotate entire view 180 degrees */
+    #videoWrapper.flipped {
+      transform: rotate(180deg);
     }
 
     video,
@@ -60,8 +67,11 @@
 
     #controls {
       display: flex;
+      flex-wrap: wrap;
       gap: 10px;
       margin-top: 10px;
+      justify-content: center;
+      align-items: center;
     }
 
     button {
@@ -71,13 +81,26 @@
       font-size: 14px;
       cursor: pointer;
     }
+
+    label {
+      font-size: 12px;
+    }
+
+    select {
+      padding: 4px 8px;
+      border-radius: 4px;
+      border: 1px solid #555;
+      background: #111;
+      color: #fff;
+      font-size: 12px;
+    }
   </style>
 </head>
 <body>
   <h1>Putter Swing Tracker</h1>
   <p>
-    Put a bright green tape/sticker on your putter head.<br>
-    Click “Start Camera”, aim at the putter, and make a stroke. The green dot’s path will be drawn as a line.
+    Put a bright <b>orange</b> tape/sticker on your putter head.<br>
+    Click “Start Camera”, aim at the putter, and make a stroke. The orange spot’s path will be drawn as a line.
   </p>
 
   <div id="videoWrapper">
@@ -88,22 +111,40 @@
   <div id="controls">
     <button id="startBtn">Start Camera</button>
     <button id="clearBtn">Clear Path</button>
+    <button id="flipBtn">Flip View</button>
+
+    <label for="autoClearSelect">
+      Auto-clear:
+      <select id="autoClearSelect">
+        <option value="0">Off</option>
+        <option value="3">Every 3s</option>
+        <option value="5">Every 5s</option>
+        <option value="10">Every 10s</option>
+      </select>
+    </label>
   </div>
 
   <script>
     const video = document.getElementById('video');
     const overlay = document.getElementById('overlay');
     const octx = overlay.getContext('2d');
+
     const startBtn = document.getElementById('startBtn');
     const clearBtn = document.getElementById('clearBtn');
+    const flipBtn = document.getElementById('flipBtn');
+    const autoClearSelect = document.getElementById('autoClearSelect');
+    const videoWrapper = document.getElementById('videoWrapper');
 
-    // Hidden canvas used just for pixel processing
+    // Hidden canvas for pixel processing
     const hiddenCanvas = document.createElement('canvas');
     const hctx = hiddenCanvas.getContext('2d');
 
-    // Stores the path of the putter head (array of {x, y})
+    // Stores path points
     let pathPoints = [];
     let tracking = false;
+
+    // Auto-clear interval ID
+    let autoClearIntervalId = null;
 
     async function startCamera() {
       try {
@@ -114,7 +155,6 @@
         video.srcObject = stream;
 
         video.addEventListener('loadedmetadata', () => {
-          // Match canvases to video size
           const width = video.videoWidth;
           const height = video.videoHeight;
 
@@ -138,7 +178,27 @@
       octx.clearRect(0, 0, overlay.width, overlay.height);
     }
 
-    // Convert RGB to HSV so we can threshold by color more easily
+    function setAutoClearInterval() {
+      // Clear any existing interval
+      if (autoClearIntervalId !== null) {
+        clearInterval(autoClearIntervalId);
+        autoClearIntervalId = null;
+      }
+
+      const seconds = parseInt(autoClearSelect.value, 10);
+      if (seconds > 0) {
+        autoClearIntervalId = setInterval(() => {
+          clearPath();
+        }, seconds * 1000);
+      }
+    }
+
+    // Flip the whole view (video + path)
+    function toggleFlip() {
+      videoWrapper.classList.toggle('flipped');
+    }
+
+    // Convert RGB to HSV
     function rgbToHsv(r, g, b) {
       r /= 255; g /= 255; b /= 255;
       const max = Math.max(r, g, b), min = Math.min(r, g, b);
@@ -168,15 +228,15 @@
       const w = hiddenCanvas.width;
       const h = hiddenCanvas.height;
 
-      // Draw current video frame to hidden canvas
+      // Draw current frame to hidden canvas
       hctx.drawImage(video, 0, 0, w, h);
       const frame = hctx.getImageData(0, 0, w, h);
       const data = frame.data;
 
       let sumX = 0, sumY = 0, count = 0;
 
-      // Loop through pixels, but skip some to make it faster (step = 4 → every 4th pixel)
-      const step = 4 * 4; // 4 channels * skip 4 pixels
+      // Loop through pixels (skip some for speed)
+      const step = 4 * 4; // RGBA * skip 4 pixels
       for (let i = 0; i < data.length; i += step) {
         const r = data[i];
         const g = data[i + 1];
@@ -184,12 +244,12 @@
 
         const hsv = rgbToHsv(r, g, b);
 
-        // ---- Color filter (tweak if needed) ----
-        // Target: bright green-ish
+        // ---- Color filter for GREEN ----
         const isGreen =
-          hsv.h > 70 && hsv.h < 170 &&   // hue around green
+          hsv.h > 70 && hsv.h < 160 &&   // green hue range
           hsv.s > 0.35 &&                // fairly saturated
           hsv.v > 0.3;                   // not too dark
+
 
         if (isGreen) {
           const pixelIndex = i / 4;
@@ -208,10 +268,10 @@
         const cx = sumX / count;
         const cy = sumY / count;
 
-        // Add new point to path
+        // Add new point
         pathPoints.push({ x: cx, y: cy });
 
-        // Limit path length so it doesn't grow forever
+        // Limit path length
         if (pathPoints.length > 1000) {
           pathPoints.shift();
         }
@@ -240,7 +300,8 @@
 
     startBtn.addEventListener('click', startCamera);
     clearBtn.addEventListener('click', clearPath);
+    flipBtn.addEventListener('click', toggleFlip);
+    autoClearSelect.addEventListener('change', setAutoClearInterval);
   </script>
 </body>
 </html>
-
