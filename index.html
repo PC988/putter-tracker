@@ -15,7 +15,20 @@
       justify-content: flex-start;
       min-height: 100vh;
       padding-top: 20px;
+    }
+
+    /* Whole app container so we can flip UI */
+    #app {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
       gap: 10px;
+      transform-origin: center center;
+    }
+
+    /* When UI is flipped, rotate the whole app 180° */
+    body.ui-flipped #app {
+      transform: rotate(180deg);
     }
 
     h1 {
@@ -41,12 +54,12 @@
       border-radius: 8px;
       overflow: hidden;
       background: #111;
-      transition: transform 0.2s ease;
       transform-origin: center center;
     }
 
-    /* When flipped, rotate entire view 180 degrees */
-    #videoWrapper.flipped {
+    /* Counter-rotate the camera box so it stays normal
+       even when the UI is flipped */
+    body.ui-flipped #videoWrapper {
       transform: rotate(180deg);
     }
 
@@ -94,34 +107,47 @@
       color: #fff;
       font-size: 12px;
     }
+
+    #angleDisplay {
+      font-size: 14px;
+      margin-top: 4px;
+      text-align: center;
+    }
   </style>
 </head>
 <body>
-  <h1>Putter Swing Tracker</h1>
-  <p>
-    Put a bright <b>orange</b> tape/sticker on your putter head.<br>
-    Click “Start Camera”, aim at the putter, and make a stroke. The orange spot’s path will be drawn as a line.
-  </p>
+  <div id="app">
+    <h1>Putter Swing Tracker</h1>
+    <p>
+      Put a bright <b>green</b> tape/sticker on your putter head and a bright <b>pink</b> tape higher on the shaft or near the grip.<br>
+      The app draws the green head path and shows the angle between the green and pink markers.
+    </p>
 
-  <div id="videoWrapper">
-    <video id="video" autoplay playsinline></video>
-    <canvas id="overlay"></canvas>
-  </div>
+    <div id="videoWrapper">
+      <video id="video" autoplay playsinline></video>
+      <canvas id="overlay"></canvas>
+    </div>
 
-  <div id="controls">
-    <button id="startBtn">Start Camera</button>
-    <button id="clearBtn">Clear Path</button>
-    <button id="flipBtn">Flip View</button>
+    <div id="controls">
+      <button id="startBtn">Start Camera</button>
+      <button id="clearBtn">Clear Path</button>
+      <button id="flipBtn">Flip UI</button>
+      <button id="zeroBtn">Zero Angle</button>
 
-    <label for="autoClearSelect">
-      Auto-clear:
-      <select id="autoClearSelect">
-        <option value="0">Off</option>
-        <option value="3">Every 3s</option>
-        <option value="5">Every 5s</option>
-        <option value="10">Every 10s</option>
-      </select>
-    </label>
+      <label for="autoClearSelect">
+        Auto-clear:
+        <select id="autoClearSelect">
+          <option value="0">Off</option>
+          <option value="3">Every 3s</option>
+          <option value="5">Every 5s</option>
+          <option value="10">Every 10s</option>
+        </select>
+      </label>
+    </div>
+
+    <div id="angleDisplay">
+      Angle: <span id="angleValue">—</span>
+    </div>
   </div>
 
   <script>
@@ -132,19 +158,24 @@
     const startBtn = document.getElementById('startBtn');
     const clearBtn = document.getElementById('clearBtn');
     const flipBtn = document.getElementById('flipBtn');
+    const zeroBtn = document.getElementById('zeroBtn');
     const autoClearSelect = document.getElementById('autoClearSelect');
-    const videoWrapper = document.getElementById('videoWrapper');
+    const angleValueEl = document.getElementById('angleValue');
 
     // Hidden canvas for pixel processing
     const hiddenCanvas = document.createElement('canvas');
     const hctx = hiddenCanvas.getContext('2d');
 
-    // Stores path points
+    // Stores path points (green head)
     let pathPoints = [];
     let tracking = false;
 
     // Auto-clear interval ID
     let autoClearIntervalId = null;
+
+    // For angle calculation
+    let baselineAngle = null;  // angle at "zero"
+    let lastAngleDeg = null;   // most recent raw angle
 
     async function startCamera() {
       try {
@@ -193,9 +224,9 @@
       }
     }
 
-    // Flip the whole view (video + path)
+    // Flip only the UI (camera box is counter-rotated in CSS)
     function toggleFlip() {
-      videoWrapper.classList.toggle('flipped');
+      document.body.classList.toggle('ui-flipped');
     }
 
     // Convert RGB to HSV
@@ -219,6 +250,14 @@
       return { h: h * 360, s, v };
     }
 
+    function normalizeAngle(angleDeg) {
+      // Bring angle into -180 .. 180 range
+      let a = angleDeg;
+      while (a > 180) a -= 360;
+      while (a < -180) a += 360;
+      return a;
+    }
+
     function processFrame() {
       if (!tracking || video.readyState !== 4) {
         requestAnimationFrame(processFrame);
@@ -233,7 +272,8 @@
       const frame = hctx.getImageData(0, 0, w, h);
       const data = frame.data;
 
-      let sumX = 0, sumY = 0, count = 0;
+      let sumXGreen = 0, sumYGreen = 0, countGreen = 0;
+      let sumXPink = 0, sumYPink = 0, countPink = 0;
 
       // Loop through pixels (skip some for speed)
       const step = 4 * 4; // RGBA * skip 4 pixels
@@ -244,34 +284,50 @@
 
         const hsv = rgbToHsv(r, g, b);
 
-        // ---- Color filter for GREEN ----
+        // ---- Color filter for GREEN (head) ----
         const isGreen =
-          hsv.h > 70 && hsv.h < 160 &&   // green hue range
-          hsv.s > 0.35 &&                // fairly saturated
-          hsv.v > 0.3;                   // not too dark
+          hsv.h > 70 && hsv.h < 160 &&
+          hsv.s > 0.35 &&
+          hsv.v > 0.3;
 
+        // ---- Color filter for PINK (shaft/grip) ----
+        // Pink/magenta ~ hue 300-360 or near 0, saturated & bright
+        const isPink =
+          (hsv.h > 300 || hsv.h < 20) &&
+          hsv.s > 0.35 &&
+          hsv.v > 0.4;
+
+        const pixelIndex = i / 4;
+        const x = pixelIndex % w;
+        const y = Math.floor(pixelIndex / w);
 
         if (isGreen) {
-          const pixelIndex = i / 4;
-          const x = pixelIndex % w;
-          const y = Math.floor(pixelIndex / w);
-          sumX += x;
-          sumY += y;
-          count++;
+          sumXGreen += x;
+          sumYGreen += y;
+          countGreen++;
+        }
+
+        if (isPink) {
+          sumXPink += x;
+          sumYPink += y;
+          countPink++;
         }
       }
 
-      // Clear overlay
+      // Clear overlay before drawing new frame
       octx.clearRect(0, 0, overlay.width, overlay.height);
 
-      if (count > 0) {
-        const cx = sumX / count;
-        const cy = sumY / count;
+      let greenCenter = null;
+      let pinkCenter = null;
 
-        // Add new point
-        pathPoints.push({ x: cx, y: cy });
+      // Handle green center and path
+      if (countGreen > 0) {
+        const cxG = sumXGreen / countGreen;
+        const cyG = sumYGreen / countGreen;
+        greenCenter = { x: cxG, y: cyG };
 
-        // Limit path length
+        // Add to path
+        pathPoints.push({ x: cxG, y: cyG });
         if (pathPoints.length > 1000) {
           pathPoints.shift();
         }
@@ -288,19 +344,68 @@
           octx.stroke();
         }
 
-        // Draw current point
+        // Draw green marker
         octx.beginPath();
-        octx.arc(cx, cy, 8, 0, Math.PI * 2);
-        octx.fillStyle = "yellow";
+        octx.arc(cxG, cyG, 8, 0, Math.PI * 2);
+        octx.fillStyle = "lime";
         octx.fill();
+      }
+
+      // Handle pink center
+      if (countPink > 0) {
+        const cxP = sumXPink / countPink;
+        const cyP = sumYPink / countPink;
+        pinkCenter = { x: cxP, y: cyP };
+
+        // Draw pink marker
+        octx.beginPath();
+        octx.arc(cxP, cyP, 8, 0, Math.PI * 2);
+        octx.fillStyle = "magenta";
+        octx.fill();
+      }
+
+      // If we have both markers, compute angle and draw line between them
+      if (greenCenter && pinkCenter) {
+        // Draw line between green and pink
+        octx.beginPath();
+        octx.moveTo(greenCenter.x, greenCenter.y);
+        octx.lineTo(pinkCenter.x, pinkCenter.y);
+        octx.lineWidth = 3;
+        octx.strokeStyle = "yellow";
+        octx.stroke();
+
+        // Angle from green to pink
+        const dx = pinkCenter.x - greenCenter.x;
+        const dy = pinkCenter.y - greenCenter.y;
+        let angleRad = Math.atan2(dy, dx);
+        let angleDeg = angleRad * 180 / Math.PI;
+        angleDeg = normalizeAngle(angleDeg);
+        lastAngleDeg = angleDeg;
+
+        let displayAngle = angleDeg;
+        if (baselineAngle !== null) {
+          displayAngle = normalizeAngle(angleDeg - baselineAngle);
+        }
+
+        angleValueEl.textContent = displayAngle.toFixed(1) + "°";
+      } else {
+        // If one marker is missing, we can't show a reliable angle
+        angleValueEl.textContent = "—";
       }
 
       requestAnimationFrame(processFrame);
     }
 
+    function zeroAngle() {
+      if (lastAngleDeg !== null) {
+        baselineAngle = lastAngleDeg;
+      }
+    }
+
     startBtn.addEventListener('click', startCamera);
     clearBtn.addEventListener('click', clearPath);
     flipBtn.addEventListener('click', toggleFlip);
+    zeroBtn.addEventListener('click', zeroAngle);
     autoClearSelect.addEventListener('change', setAutoClearInterval);
   </script>
 </body>
