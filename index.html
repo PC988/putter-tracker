@@ -186,13 +186,12 @@
 
         // ---- Color filter (tweak if needed) ----
         // Target: bright green-ish
-        // ---- Color filter for ORANGE ----
-        // Hue ~ 15–40, saturated, bright-ish
-        const isOrange =
-          hsv.h > 15 && hsv.h < 40 &&    // hue around orange
-          hsv.s > 0.4 &&                 // nice and saturated
-          hsv.v > 0.35;                  // not too dark
-        if (isOrange) {
+        const isGreen =
+          hsv.h > 70 && hsv.h < 170 &&   // hue around green
+          hsv.s > 0.35 &&                // fairly saturated
+          hsv.v > 0.3;                   // not too dark
+
+        if (isGreen) {
           const pixelIndex = i / 4;
           const x = pixelIndex % w;
           const y = Math.floor(pixelIndex / w);
@@ -244,3 +243,4 @@
   </script>
 </body>
 </html>
+
