@@ -120,7 +120,7 @@
     <h1>Putter Swing Tracker</h1>
     <p>
       Put a bright <b>blue</b> sticker on the putter head and a bright <b>red</b> sticker higher on the shaft or grip.<br>
-      The app draws the blue head path and shows the angle of the line from blue → red.
+      The app draws the blue head path, shows live angle, and locks a contact angle when the head crosses the contact line.
     </p>
 
     <div id="videoWrapper">
@@ -147,7 +147,8 @@
     </div>
 
     <div id="angleDisplay">
-      Angle: <span id="angleValue">—</span>
+      Live angle: <span id="liveAngle">—</span><br>
+      Contact angle: <span id="contactAngle">—</span>
     </div>
   </div>
 
@@ -162,7 +163,8 @@
     const flipBtn = document.getElementById('flipBtn');
     const zeroBtn = document.getElementById('zeroBtn');
     const autoClearSelect = document.getElementById('autoClearSelect');
-    const angleValueEl = document.getElementById('angleValue');
+    const liveAngleEl = document.getElementById('liveAngle');
+    const contactAngleEl = document.getElementById('contactAngle');
 
     // Hidden canvas for pixel processing
     const hiddenCanvas = document.createElement('canvas');
@@ -171,14 +173,19 @@
     // Stores path points (blue head)
     let pathPoints = [];
     let tracking = false;        // controls whether frames are processed
-    let hasLoopStarted = false;  // so we only start requestAnimationFrame once
+    let hasLoopStarted = false;  // ensure RAF loop only started once
 
     // Auto-clear interval ID
     let autoClearIntervalId = null;
 
     // For angle calculation
-    let baselineAngle = null;  // angle at "zero"
-    let lastAngleDeg = null;   // most recent raw angle
+    let baselineAngle = null;    // angle at "zero"
+    let lastAngleDeg = null;     // most recent raw angle
+    let contactAngleDeg = null;  // locked-in contact angle
+
+    // Contact line
+    let contactLineY = null;
+    let prevBlueY = null;        // previous blue Y position for crossing detection
 
     async function startCamera() {
       try {
@@ -196,6 +203,9 @@
           overlay.height = height;
           hiddenCanvas.width = width;
           hiddenCanvas.height = height;
+
+          // Place contact line at ~60% down the frame (tweak if you want)
+          contactLineY = height * 0.6;
 
           tracking = true;
           pauseBtn.textContent = "Stop";
@@ -291,8 +301,8 @@
       let sumXBlue = 0, sumYBlue = 0, countBlue = 0;
       let sumXRed = 0, sumYRed = 0, countRed = 0;
 
-      // Loop through pixels (skip some for speed)
-      const step = 4 * 4; // RGBA * skip 4 pixels
+      // Loop through pixels (denser sampling for faster recognition)
+      const step = 4 * 1; // RGBA * skip 1 pixel (highest accuracy)
       for (let i = 0; i < data.length; i += step) {
         const r = data[i];
         const g = data[i + 1];
@@ -301,16 +311,16 @@
         const hsv = rgbToHsv(r, g, b);
 
         // ---- Color filter for BLUE (head) ----
-        // Blue ~ hue around 190–250
+        // Blue ~ hue around 180–260, quite saturated & bright
         const isBlue =
-          hsv.h > 190 && hsv.h < 250 &&
-          hsv.s > 0.4 &&
-          hsv.v > 0.25;
+          hsv.h > 180 && hsv.h < 260 &&
+          hsv.s > 0.45 &&
+          hsv.v > 0.3;
 
         // ---- Color filter for RED (top) ----
-        // Red ~ near 0 or 360
+        // Red ~ near 0 or 360, saturated, bright
         const isRed =
-          (hsv.h < 20 || hsv.h > 340) &&
+          (hsv.h < 25 || hsv.h > 335) &&
           hsv.s > 0.5 &&
           hsv.v > 0.3;
 
@@ -334,36 +344,59 @@
       // Clear overlay before drawing new frame
       octx.clearRect(0, 0, overlay.width, overlay.height);
 
+      // Draw the contact line (semi-transparent)
+      if (contactLineY !== null) {
+        octx.save();
+        octx.strokeStyle = "rgba(0, 255, 255, 0.7)";
+        octx.lineWidth = 2;
+        octx.setLineDash([10, 6]);
+        octx.beginPath();
+        octx.moveTo(0, contactLineY);
+        octx.lineTo(overlay.width, contactLineY);
+        octx.stroke();
+        octx.setLineDash([]);
+        octx.fillStyle = "rgba(0, 255, 255, 0.7)";
+        octx.font = "14px sans-serif";
+        octx.textAlign = "right";
+        octx.fillText("Contact line", overlay.width - 10, contactLineY - 8);
+        octx.restore();
+      }
+
       let blueCenter = null;
       let redCenter = null;
 
-      // Handle blue center and path (putter head)
+      // Handle blue center (putter head)
       if (countBlue > 0) {
         const cxB = sumXBlue / countBlue;
         const cyB = sumYBlue / countBlue;
         blueCenter = { x: cxB, y: cyB };
 
-        // Add to path
+        // Add to path (only when blue is seen)
         pathPoints.push({ x: cxB, y: cyB });
-        if (pathPoints.length > 1000) {
+        if (pathPoints.length > 1500) {
           pathPoints.shift();
         }
+      } else {
+        // Lost blue tracking this frame
+        blueCenter = null;
+      }
 
-        // Draw path
-        if (pathPoints.length > 1) {
-          octx.beginPath();
-          octx.lineWidth = 4;
-          octx.strokeStyle = "lime";
-          octx.moveTo(pathPoints[0].x, pathPoints[0].y);
-          for (let i = 1; i < pathPoints.length; i++) {
-            octx.lineTo(pathPoints[i].x, pathPoints[i].y);
-          }
-          octx.stroke();
-        }
-
-        // Draw blue marker
+      // ---- Draw path ALWAYS so it doesn't disappear when club is off-screen ----
+      if (pathPoints.length > 1) {
         octx.beginPath();
-        octx.arc(cxB, cyB, 8, 0, Math.PI * 2);
+        octx.lineWidth = 4;
+        octx.strokeStyle = "lime";
+        octx.moveTo(pathPoints[0].x, pathPoints[0].y);
+        for (let i = 1; i < pathPoints.length; i++) {
+          octx.lineTo(pathPoints[i].x, pathPoints[i].y);
+        }
+        octx.stroke();
+      }
+
+      // Draw blue marker if visible
+      if (blueCenter) {
+        octx.beginPath();
+        octx.arc(blueCenter.x, blueCenter.y, 8, 0, Math.PI * 2);
         octx.fillStyle = "deepskyblue";
         octx.fill();
       }
@@ -404,10 +437,26 @@
           displayAngle = normalizeAngle(angleDeg - baselineAngle);
         }
 
-        angleValueEl.textContent = displayAngle.toFixed(1) + "°";
+        liveAngleEl.textContent = displayAngle.toFixed(1) + "°";
+
+        // --- Detect crossing of contact line to lock contact angle ---
+        if (contactLineY !== null) {
+          if (prevBlueY !== null) {
+            const prevSide = prevBlueY - contactLineY;
+            const currSide = blueCenter.y - contactLineY;
+
+            // Different signs -> crossed the line, and not just tiny jitter near it
+            if (prevSide * currSide < 0 && Math.abs(prevSide) > 5 && Math.abs(currSide) > 5) {
+              contactAngleDeg = displayAngle;
+              contactAngleEl.textContent = contactAngleDeg.toFixed(1) + "°";
+            }
+          }
+          prevBlueY = blueCenter.y;
+        }
       } else {
-        // If one marker is missing, we can't show a reliable angle
-        angleValueEl.textContent = "—";
+        // If we can't see both, still keep previous live angle text,
+        // but reset prevBlueY so we don't trigger fake crossings later.
+        prevBlueY = null;
       }
 
       requestAnimationFrame(processFrame);
