@@ -432,19 +432,22 @@
         }
         liveAngleEl.textContent = displayAngle.toFixed(1) + "°";
 
-        // Check crossing of vertical contact line
-        if (contactLineX !== null) {
+       if (contactLineX !== null) {
           if (prevBlueX !== null) {
             const prevSide = prevBlueX - contactLineX;
             const currSide = blueCenter.x - contactLineX;
-
-            if (prevSide * currSide < 0 && Math.abs(prevSide) > 5 && Math.abs(currSide) > 5) {
+        
+            // If the blue dot was on one side and is now on the other (or exactly on it),
+            // count that as a crossing and lock the contact angle.
+            if (prevSide * currSide <= 0) {
               contactAngleDeg = displayAngle;
               contactAngleEl.textContent = contactAngleDeg.toFixed(1) + "°";
             }
-          }
-          prevBlueX = blueCenter.x;
         }
+        // Always update previous X
+        prevBlueX = blueCenter.x;
+      }
+
       } else {
         prevBlueX = null;
       }
@@ -500,3 +503,4 @@
   </script>
 </body>
 </html>
+
