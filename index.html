@@ -75,7 +75,7 @@
       position: absolute;
       left: 0;
       top: 0;
-      pointer-events: none; /* we do hit-testing via JS */
+      pointer-events: none; /* pointer events handled via JS with hit-testing */
     }
 
     #controls {
@@ -120,7 +120,7 @@
     <h1>Putter Swing Tracker</h1>
     <p>
       Put a bright <b>blue</b> sticker on the putter head and a bright <b>red</b> sticker higher on the shaft or grip.<br>
-      The app draws the blue head path, shows live angle, and locks a contact angle when the head crosses the vertical contact line.<br>
+      The app draws the blue head path, shows live angle, and locks a contact angle when the head crosses the vertical contact line.
       Drag the cyan line left/right to set your contact line.
     </p>
 
@@ -284,9 +284,9 @@
 
     function processFrame() {
       if (!hasLoopStarted) return;
-      requestAnimationFrame(processFrame);
 
       if (!tracking || video.readyState !== 4) {
+        requestAnimationFrame(processFrame);
         return;
       }
 
@@ -309,17 +309,17 @@
 
         const hsv = rgbToHsv(r, g, b);
 
-        // BLUE (head) – more forgiving for motion blur
+        // BLUE (head)
         const isBlue =
           hsv.h > 180 && hsv.h < 260 &&
-          hsv.s > 0.30 &&
-          hsv.v > 0.20;
+          hsv.s > 0.45 &&
+          hsv.v > 0.3;
 
-        // Base RED filter (very bright, saturated sticker red)
-        const isRedBase =
-          (hsv.h < 10 || hsv.h > 350) &&  // pure red, not orange
-          hsv.s > 0.65 &&                 // highly saturated
-          hsv.v > 0.45;                   // pretty bright
+        // RED (top)
+        const isRed =
+          (hsv.h < 10 || hsv.h > 350) &&  // tighter red band, less orange/skin
+          hsv.s > 0.65 &&                 // really saturated
+          hsv.v > 0.45;
 
         const pixelIndex = i / 4;
         const x = pixelIndex % w;
@@ -331,7 +331,7 @@
           countBlue++;
         }
 
-        if (isRedBase) {
+        if (isRed) {
           sumXRed += x;
           sumYRed += y;
           countRed++;
@@ -360,7 +360,6 @@
       }
 
       let blueCenter = null;
-      let rawRedCenter = null;
       let redCenter = null;
 
       // BLUE center (head)
@@ -374,6 +373,8 @@
         if (pathPoints.length > 1500) {
           pathPoints.shift();
         }
+      } else {
+        blueCenter = null;
       }
 
       // Draw path ALWAYS so it persists when club leaves frame
@@ -396,36 +397,14 @@
         octx.fill();
       }
 
-      // RED center (raw, before area & position filters)
+      // RED center (top)
       if (countRed > 0) {
         const cxR = sumXRed / countRed;
         const cyR = sumYRed / countRed;
-        rawRedCenter = { x: cxR, y: cyR };
-      }
+        redCenter = { x: cxR, y: cyR };
 
-      // ---- Filter red by area (ignore huge blobs like feet/legs) ----
-      // Adjust these thresholds if needed based on resolution
-      if (countRed > 30 && countRed < 2500 && rawRedCenter) {
-        redCenter = { ...rawRedCenter };
-      }
-
-      // ---- Further filter red based on position relative to blue ----
-      // (Assuming red is on the shaft above the head)
-      if (redCenter && blueCenter) {
-        const dx = redCenter.x - blueCenter.x;
-        const dy = redCenter.y - blueCenter.y; // negative if red is above
-
-        // If red is way off from where the sticker should be, drop it.
-        // tweak numbers if needed:
-        if (Math.abs(dx) > 150 || dy > -10 || dy < -400) {
-          redCenter = null;
-        }
-      }
-
-      // Draw red marker (after filters)
-      if (redCenter) {
         octx.beginPath();
-        octx.arc(redCenter.x, redCenter.y, 8, 0, Math.PI * 2);
+        octx.arc(cxR, cyR, 8, 0, Math.PI * 2);
         octx.fillStyle = "red";
         octx.fill();
       }
@@ -453,25 +432,27 @@
         }
         liveAngleEl.textContent = displayAngle.toFixed(1) + "°";
 
-        // Check crossing of vertical contact line
-        if (contactLineX !== null) {
+       if (contactLineX !== null) {
           if (prevBlueX !== null) {
             const prevSide = prevBlueX - contactLineX;
             const currSide = blueCenter.x - contactLineX;
-
-            // Crossed from one side to the other OR got very close to the line
-            if (prevSide * currSide <= 0 || Math.abs(currSide) < 10) {
+        
+            // If the blue dot was on one side and is now on the other (or exactly on it),
+            // count that as a crossing and lock the contact angle.
+            if (prevSide * currSide <= 0) {
               contactAngleDeg = displayAngle;
               contactAngleEl.textContent = contactAngleDeg.toFixed(1) + "°";
             }
-          }
-          // IMPORTANT: we do NOT reset prevBlueX on lost frames anymore
-          prevBlueX = blueCenter.x;
         }
+        // Always update previous X
+        prevBlueX = blueCenter.x;
       }
 
-      // If we don't see both markers, don't nuke prevBlueX; just leave it
-      // so a fast swing can still register when it reappears.
+      } else {
+        prevBlueX = null;
+      }
+
+      requestAnimationFrame(processFrame);
     }
 
     function zeroAngle() {
@@ -507,6 +488,7 @@
       draggingLine = false;
     }
 
+    // pointer events
     overlay.addEventListener('pointerdown', onPointerDown);
     window.addEventListener('pointermove', onPointerMove);
     window.addEventListener('pointerup', onPointerUp);
