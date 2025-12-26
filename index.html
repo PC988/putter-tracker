@@ -1,0 +1,246 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Putter Swing Tracker</title>
+  <style>
+    body {
+      margin: 0;
+      background: #000;
+      color: #fff;
+      font-family: sans-serif;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: flex-start;
+      min-height: 100vh;
+      padding-top: 20px;
+      gap: 10px;
+    }
+
+    h1 {
+      margin: 0 0 5px;
+      font-size: 18px;
+      text-align: center;
+    }
+
+    p {
+      margin: 0;
+      font-size: 12px;
+      text-align: center;
+      max-width: 600px;
+      opacity: 0.8;
+    }
+
+    #videoWrapper {
+      position: relative;
+      width: 90vw;
+      max-width: 800px;
+      aspect-ratio: 16 / 9;
+      border: 2px solid #fff;
+      border-radius: 8px;
+      overflow: hidden;
+      background: #111;
+    }
+
+    video,
+    canvas {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      display: block;
+    }
+
+    canvas {
+      position: absolute;
+      left: 0;
+      top: 0;
+      pointer-events: none;
+    }
+
+    #controls {
+      display: flex;
+      gap: 10px;
+      margin-top: 10px;
+    }
+
+    button {
+      padding: 8px 14px;
+      border-radius: 6px;
+      border: none;
+      font-size: 14px;
+      cursor: pointer;
+    }
+  </style>
+</head>
+<body>
+  <h1>Putter Swing Tracker</h1>
+  <p>
+    Put a bright green tape/sticker on your putter head.<br>
+    Click “Start Camera”, aim at the putter, and make a stroke. The green dot’s path will be drawn as a line.
+  </p>
+
+  <div id="videoWrapper">
+    <video id="video" autoplay playsinline></video>
+    <canvas id="overlay"></canvas>
+  </div>
+
+  <div id="controls">
+    <button id="startBtn">Start Camera</button>
+    <button id="clearBtn">Clear Path</button>
+  </div>
+
+  <script>
+    const video = document.getElementById('video');
+    const overlay = document.getElementById('overlay');
+    const octx = overlay.getContext('2d');
+    const startBtn = document.getElementById('startBtn');
+    const clearBtn = document.getElementById('clearBtn');
+
+    // Hidden canvas used just for pixel processing
+    const hiddenCanvas = document.createElement('canvas');
+    const hctx = hiddenCanvas.getContext('2d');
+
+    // Stores the path of the putter head (array of {x, y})
+    let pathPoints = [];
+    let tracking = false;
+
+    async function startCamera() {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: "environment" },
+          audio: false
+        });
+        video.srcObject = stream;
+
+        video.addEventListener('loadedmetadata', () => {
+          // Match canvases to video size
+          const width = video.videoWidth;
+          const height = video.videoHeight;
+
+          overlay.width = width;
+          overlay.height = height;
+          hiddenCanvas.width = width;
+          hiddenCanvas.height = height;
+
+          tracking = true;
+          requestAnimationFrame(processFrame);
+        }, { once: true });
+
+      } catch (err) {
+        console.error(err);
+        alert("Could not access camera: " + err.message);
+      }
+    }
+
+    function clearPath() {
+      pathPoints = [];
+      octx.clearRect(0, 0, overlay.width, overlay.height);
+    }
+
+    // Convert RGB to HSV so we can threshold by color more easily
+    function rgbToHsv(r, g, b) {
+      r /= 255; g /= 255; b /= 255;
+      const max = Math.max(r, g, b), min = Math.min(r, g, b);
+      let h, s, v = max;
+      const d = max - min;
+      s = max === 0 ? 0 : d / max;
+
+      if (max === min) {
+        h = 0; // achromatic
+      } else {
+        switch (max) {
+          case r: h = (g - b) / d + (g < b ? 6 : 0); break;
+          case g: h = (b - r) / d + 2; break;
+          case b: h = (r - g) / d + 4; break;
+        }
+        h /= 6;
+      }
+      return { h: h * 360, s, v };
+    }
+
+    function processFrame() {
+      if (!tracking || video.readyState !== 4) {
+        requestAnimationFrame(processFrame);
+        return;
+      }
+
+      const w = hiddenCanvas.width;
+      const h = hiddenCanvas.height;
+
+      // Draw current video frame to hidden canvas
+      hctx.drawImage(video, 0, 0, w, h);
+      const frame = hctx.getImageData(0, 0, w, h);
+      const data = frame.data;
+
+      let sumX = 0, sumY = 0, count = 0;
+
+      // Loop through pixels, but skip some to make it faster (step = 4 → every 4th pixel)
+      const step = 4 * 4; // 4 channels * skip 4 pixels
+      for (let i = 0; i < data.length; i += step) {
+        const r = data[i];
+        const g = data[i + 1];
+        const b = data[i + 2];
+
+        const hsv = rgbToHsv(r, g, b);
+
+        // ---- Color filter (tweak if needed) ----
+        // Target: bright green-ish
+        // ---- Color filter for ORANGE ----
+        // Hue ~ 15–40, saturated, bright-ish
+        const isOrange =
+          hsv.h > 15 && hsv.h < 40 &&    // hue around orange
+          hsv.s > 0.4 &&                 // nice and saturated
+          hsv.v > 0.35;                  // not too dark
+        if (isOrange) {
+          const pixelIndex = i / 4;
+          const x = pixelIndex % w;
+          const y = Math.floor(pixelIndex / w);
+          sumX += x;
+          sumY += y;
+          count++;
+        }
+      }
+
+      // Clear overlay
+      octx.clearRect(0, 0, overlay.width, overlay.height);
+
+      if (count > 0) {
+        const cx = sumX / count;
+        const cy = sumY / count;
+
+        // Add new point to path
+        pathPoints.push({ x: cx, y: cy });
+
+        // Limit path length so it doesn't grow forever
+        if (pathPoints.length > 1000) {
+          pathPoints.shift();
+        }
+
+        // Draw path
+        if (pathPoints.length > 1) {
+          octx.beginPath();
+          octx.lineWidth = 4;
+          octx.strokeStyle = "lime";
+          octx.moveTo(pathPoints[0].x, pathPoints[0].y);
+          for (let i = 1; i < pathPoints.length; i++) {
+            octx.lineTo(pathPoints[i].x, pathPoints[i].y);
+          }
+          octx.stroke();
+        }
+
+        // Draw current point
+        octx.beginPath();
+        octx.arc(cx, cy, 8, 0, Math.PI * 2);
+        octx.fillStyle = "yellow";
+        octx.fill();
+      }
+
+      requestAnimationFrame(processFrame);
+    }
+
+    startBtn.addEventListener('click', startCamera);
+    clearBtn.addEventListener('click', clearPath);
+  </script>
+</body>
+</html>
